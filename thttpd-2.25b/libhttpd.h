@@ -36,8 +36,10 @@
 #include <arpa/inet.h>
 #include <netdb.h>
 
+#if 0
 #if defined(AF_INET6) && defined(IN6_IS_ADDR_V4MAPPED)
 #define USE_IPV6
+#endif
 #endif
 
 
@@ -149,6 +151,8 @@ typedef struct {
 #define METHOD_GET 1
 #define METHOD_HEAD 2
 #define METHOD_POST 3
+#define METHOD_PUT 4
+#define METHOD_DELETE 5
 
 /* States for checked_state. */
 #define CHST_FIRSTWORD 0

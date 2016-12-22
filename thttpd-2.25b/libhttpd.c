@@ -136,6 +136,10 @@ static int b64_decode( const char* str, unsigned char* space, int size );
 static int auth_check( httpd_conn* hc, char* dirname  );
 static int auth_check2( httpd_conn* hc, char* dirname  );
 #endif /* AUTH_FILE */
+#ifdef ACCESS_FILE
+static int access_check (httpd_conn* hc, char* dirname);
+static int access_check2 (httpd_conn* hc, char* dirname);
+#endif /* ACCESS_FILE */
 static void send_dirredirect( httpd_conn* hc );
 static int hexit( char c );
 static void strdecode( char* to, char* from );
@@ -876,6 +880,139 @@ send_err_file( httpd_conn* hc, int status, char* title, char* extraheads, char* 
     }
 #endif /* ERR_DIR */
 
+#ifdef ACCESS_FILE
+static int err_accessfile (httpd_conn* hc, char* accesspath, char* err, FILE* f)
+{
+  fclose(f);
+
+  syslog(LOG_ERR, "%.80s access file %.80s: invalid line: %s",
+    httpd_ntoa(&hc->client_addr), accesspath, err);
+
+  httpd_send_err(hc, 403, err403title, "", ERROR_FORM(err403form, 
+    "The requested URL '%.80s' is protected by an access file, but the "
+    "access file contains garbage.\n"), hc->encodedurl);
+
+  return -1;
+}
+
+/* Returns -1 == unauthorized, 0 == no access file, 1 = authorized. */
+static int
+access_check( httpd_conn* hc, char* dirname  )
+    {
+    if ( hc->hs->global_passwd )
+	{
+	char* topdir;
+	if ( hc->hs->vhost && hc->hostdir[0] != '\0' )
+	    topdir = hc->hostdir;
+	else
+	    topdir = ".";
+	switch ( access_check2( hc, topdir ) )
+	    {
+	    case -1:
+	    return -1;
+	    case 1:
+	    return 1;
+	    }
+	}
+    return access_check2( hc, dirname );
+    }
+
+/* Returns -1 == unauthorized, 0 == no access file, 1 = authorized. */
+static int access_check2 (httpd_conn* hc, char* dirname)
+{
+  static char* accesspath;
+  static size_t maxaccesspath = 0;
+  struct in_addr ipv4_addr, ipv4_mask = { 0xffffffff };
+  FILE* fp;
+  char line[500];
+  struct stat sb;
+  char *addr, *addr1, *addr2, *mask;
+  unsigned long l;
+
+  /* Construct access filename. */
+  httpd_realloc_str(&accesspath, &maxaccesspath, strlen(dirname) + 1 +
+    sizeof(ACCESS_FILE));
+
+  my_snprintf(accesspath, maxaccesspath, "%s/%s", dirname, ACCESS_FILE);
+
+  /* Does this directory have an access file? */
+  if (lstat(accesspath, &sb) < 0)
+    /* Nope, let the request go through. */
+    return 0;
+
+  /* Open the access file. */
+  fp = fopen(accesspath, "r");
+  if (!fp) {
+    /* The file exists but we can't open it? Disallow access. */
+    syslog(LOG_ERR, "%.80s access file %.80s could not be opened - %m",
+      httpd_ntoa(&hc->client_addr), accesspath);
+
+    httpd_send_err(hc, 403, err403title, "", ERROR_FORM(err403form, 
+      "The requested URL '%.80s' is protected by an access file, but "
+      "the access file cannot be opened.\n"), hc->encodedurl);
+
+    return -1;
+  }
+
+  /* Read it. */
+  while (fgets(line, sizeof(line), fp)) {
+    /* Nuke newline. */
+    l = strlen(line);
+    if (line[l - 1] == '\n') line[l - 1] = '\0';
+
+    addr1 = strrchr(line, ' ');
+    addr2 = strrchr(line, '\t');
+    if (addr1 > addr2) addr = addr1;
+    else addr = addr2;
+    if (!addr) return err_accessfile(hc, accesspath, line, fp);
+
+    mask = strchr(++addr, '/');
+    if (mask) {
+      *mask++ = '\0';
+      if (!*mask) return err_accessfile(hc, accesspath, line, fp);
+      if (!strchr(mask, '.')) {
+        l = atol(mask);
+        if ((l < 0) || (l > 32))
+          return err_accessfile(hc, accesspath, line, fp);
+        for (l = 32 - l; l > 0; --l) ipv4_mask.s_addr ^= 1 << (l - 1);
+        ipv4_mask.s_addr = htonl(ipv4_mask.s_addr);
+      }
+      else {
+        if (!inet_aton(mask, &ipv4_mask))
+          return err_accessfile(hc, accesspath, line, fp);
+      }
+    }
+
+    if (!inet_aton(addr, &ipv4_addr))
+      return err_accessfile(hc, accesspath, line, fp);
+
+    /* Does client addr match this rule? */
+    if ((hc->client_addr.sa_in.sin_addr.s_addr & ipv4_mask.s_addr) ==
+      (ipv4_addr.s_addr & ipv4_mask.s_addr)) {
+      /* Yes. */
+      switch (line[0]) {
+        case 'd':
+        case 'D':
+	  break;
+
+        case 'a':
+        case 'A':
+          fclose(fp);
+          return 1;
+
+        default:
+          return err_accessfile(hc, accesspath, line, fp);
+      }
+    }
+  }
+
+  httpd_send_err(hc, 403, err403title, "", ERROR_FORM(err403form, 
+    "The requested URL '%.80s' is protected by an address restriction."),
+    hc->encodedurl);
+  fclose(fp);
+  return -1;
+}
+#endif /* ACCESS_FILE */
 
 #ifdef AUTH_FILE
 
@@ -893,7 +1030,7 @@ send_authenticate( httpd_conn* hc, char* realm )
     /* If the request was a POST then there might still be data to be read,
     ** so we need to do a lingering close.
     */
-    if ( hc->method == METHOD_POST )
+    if ( hc->method == METHOD_POST || hc->method == METHOD_PUT )
 	hc->should_linger = 1;
     }
 
@@ -1030,7 +1167,7 @@ auth_check2( httpd_conn* hc, char* dirname  )
     (void) my_snprintf( authpath, maxauthpath, "%s/%s", dirname, AUTH_FILE );
 
     /* Does this directory have an auth file? */
-    if ( stat( authpath, &sb ) < 0 )
+    if ( lstat( authpath, &sb ) < 0 )
 	/* Nope, let the request go through. */
 	return 0;
 
@@ -1196,6 +1333,8 @@ httpd_method_str( int method )
 	case METHOD_GET: return "GET";
 	case METHOD_HEAD: return "HEAD";
 	case METHOD_POST: return "POST";
+	case METHOD_PUT: return "PUT";
+	case METHOD_DELETE: return "DELETE";
 	default: return "UNKNOWN";
 	}
     }
@@ -2010,6 +2149,10 @@ httpd_parse_request( httpd_conn* hc )
 	hc->method = METHOD_HEAD;
     else if ( strcasecmp( method_str, httpd_method_str( METHOD_POST ) ) == 0 )
 	hc->method = METHOD_POST;
+    else if ( strcasecmp( method_str, httpd_method_str( METHOD_PUT ) ) == 0 )
+	hc->method = METHOD_PUT;
+    else if ( strcasecmp( method_str, httpd_method_str( METHOD_DELETE ) ) == 0 )
+	hc->method = METHOD_DELETE;
     else
 	{
 	httpd_send_err( hc, 501, err501title, "", err501form, method_str );
@@ -3375,7 +3518,7 @@ cgi_child( httpd_conn* hc )
     ** interposer process, depending on if we've read some of the data
     ** into our buffer.
     */
-    if ( hc->method == METHOD_POST && hc->read_idx > hc->checked_idx )
+    if ( ( hc->method == METHOD_POST || hc->method == METHOD_PUT ) && hc->read_idx > hc->checked_idx )
 	{
 	int p[2];
 
@@ -3526,7 +3669,7 @@ cgi( httpd_conn* hc )
     int r;
     ClientData client_data;
 
-    if ( hc->method == METHOD_GET || hc->method == METHOD_POST )
+    if ( hc->method == METHOD_GET || hc->method == METHOD_POST || hc->method == METHOD_PUT || hc->method == METHOD_DELETE )
 	{
 	if ( hc->hs->cgi_limit != 0 && hc->hs->cgi_count >= hc->hs->cgi_limit )
 	    {
@@ -3597,7 +3740,8 @@ really_start_request( httpd_conn* hc, struct timeval* nowP )
     expnlen = strlen( hc->expnfilename );
 
     if ( hc->method != METHOD_GET && hc->method != METHOD_HEAD &&
-	 hc->method != METHOD_POST )
+	 hc->method != METHOD_POST && hc->method != METHOD_PUT &&
+	 hc->method != METHOD_DELETE )
 	{
 	httpd_send_err(
 	    hc, 501, err501title, "", err501form, httpd_method_str( hc->method ) );
@@ -3683,6 +3827,11 @@ really_start_request( httpd_conn* hc, struct timeval* nowP )
 		hc->encodedurl );
 	    return -1;
 	    }
+#ifdef ACCESS_FILE
+	/* Check access file for this directory. */
+	if ( access_check( hc, hc->expnfilename ) == -1 )
+	    return -1;
+#endif /* ACCESS_FILE */
 #ifdef AUTH_FILE
 	/* Check authorization for this directory. */
 	if ( auth_check( hc, hc->expnfilename ) == -1 )
@@ -3732,6 +3881,50 @@ really_start_request( httpd_conn* hc, struct timeval* nowP )
 	    return -1;
 	    }
 	}
+
+#ifdef ACCESS_FILE
+    /* Check access for this directory. */
+    httpd_realloc_str( &dirname, &maxdirname, expnlen );
+    (void) strcpy( dirname, hc->expnfilename );
+    cp = strrchr( dirname, '/' );
+    if ( cp == (char*) 0 )
+	(void) strcpy( dirname, "." );
+    else
+	*cp = '\0';
+    if ( access_check( hc, dirname ) == -1 )
+	return -1;
+
+    /* Check if the filename is the ACCESS_FILE itself - that's verboten. */
+    if ( expnlen == sizeof(ACCESS_FILE) - 1 )
+	{
+	if ( strcmp( hc->expnfilename, ACCESS_FILE ) == 0 )
+	    {
+	    syslog(
+		LOG_NOTICE,
+		"%.80s URL \"%.80s\" tried to retrieve an access file",
+		httpd_ntoa( &hc->client_addr ), hc->encodedurl );
+	    httpd_send_err(
+		hc, 403, err403title, "",
+		ERROR_FORM( err403form, "The requested URL '%.80s' is an access file, retrieving it is not permitted.\n" ),
+		hc->encodedurl );
+	    return -1;
+	    }
+	}
+    else if ( expnlen >= sizeof(ACCESS_FILE) &&
+	      strcmp( &(hc->expnfilename[expnlen - sizeof(ACCESS_FILE) + 1]), ACCESS_FILE ) == 0 &&
+	      hc->expnfilename[expnlen - sizeof(ACCESS_FILE)] == '/' )
+	{
+	syslog(
+	    LOG_NOTICE,
+	    "%.80s URL \"%.80s\" tried to retrieve an access file",
+	    httpd_ntoa( &hc->client_addr ), hc->encodedurl );
+	httpd_send_err(
+	    hc, 403, err403title, "",
+	    ERROR_FORM( err403form, "The requested URL '%.80s' is an access file, retrieving it is not permitted.\n" ),
+	    hc->encodedurl );
+	return -1;
+	}
+#endif /* ACCESS_FILE */
 
 #ifdef AUTH_FILE
     /* Check authorization for this directory. */

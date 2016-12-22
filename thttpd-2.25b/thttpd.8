@@ -100,14 +100,15 @@ The config-file option names for this flag are "vhost" and "novhost",
 and the config.h option is ALWAYS_VHOST.
 .TP
 .B -g
-Use a global passwd file.
+Use global passwd/access files.
 This means that every file in the entire document tree is protected by
-the single .htpasswd file at the top of the tree.
-Otherwise the semantics of the .htpasswd file are the same.
-If this option is set but there is no .htpasswd file in
+a single .htpasswd or .htaccess file at the top of the tree.
+Otherwise the semantics of the .htpasswd and .htaccess files are the same.
+If this option is set but there are no .htpasswd and no .htaccess files in
 the top-level directory, then thttpd proceeds as if the option was
-not set - first looking for a local .htpasswd file, and if that doesn't
-exist either then serving the file without any password.
+not set - first looking for local .htpasswd and .htaccess files, and if that doesn't
+exist either then serving the file without any password and without any access
+restriction.
 If -g is the compiled-in default, then -nog disables it.
 The config-file option names for this flag are "globalpasswd" and
 "noglobalpasswd",
@@ -274,6 +275,42 @@ The utility program htpasswd(1) is included to help create and
 modify .htpasswd files.
 .PP
 Relevant config.h option: AUTH_FILE
+.SH "ACCESS RESTRICTION"
+.PP
+Access restriction is available as an option at compile time.
+If enabled, it uses an access file in the directory to be protected,
+called .htaccess by default.
+This file consists of a rule and a host address or a network range per
+line.
+Valid rules are:
+.TP
+.B allow from
+The following host address or network range is allowed to access the requested
+directory and its files.
+.TP
+.B deny from
+The following host address or network range is not allowed to access the
+requested directory and its files.
+.PP
+The protection does not carry over to subdirectories.
+There are three ways to specify a valid host address or network range:
+.TP
+.B IPv4 host address
+eg. 10.2.3.4
+.TP
+.B IPv4 network with subnet mask
+eg. 10.0.0.0/255.255.0.0
+.TP
+.B IPv4 network using CIDR notation
+eg. 10.0.0.0/16
+.PP
+Note that rules are processed in the same order as they are listed in the
+access file and that the first rule which matches the client's address is
+applied (there is no order clause).
+So if there is no allow from 0.0.0.0/0 at the end of the file the default
+action is to deny access.
+.PP
+Relevant config.h option: ACCESS_FILE
 .SH "THROTTLING"
 .PP
 The throttle file lets you set maximum byte rates on URLs or URL groups.

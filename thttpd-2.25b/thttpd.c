@@ -356,8 +356,8 @@ main( int argc, char** argv )
     {
     char* cp;
     struct passwd* pwd;
-    uid_t uid = 32767;
-    gid_t gid = 32767;
+    uid_t uid = 0;
+    gid_t gid = 0;
     char cwd[MAXPATHLEN+1];
     FILE* logfp;
     int num_ready;
@@ -400,6 +400,7 @@ main( int argc, char** argv )
     if ( throttlefile != (char*) 0 )
 	read_throttlefile( throttlefile );
 
+#if 0
     /* If we're root and we're going to become another user, get the uid/gid
     ** now.
     */
@@ -415,6 +416,7 @@ main( int argc, char** argv )
 	uid = pwd->pw_uid;
 	gid = pwd->pw_gid;
 	}
+#endif
 
     /* Log file. */
     if ( logfile != (char*) 0 )
