@@ -1,0 +1,15 @@
+diff -ur thttpd.orig/libhttpd.h thttpd/libhttpd.h
+--- thttpd.orig/libhttpd.h	2014-07-08 00:20:02.691331895 +0100
++++ thttpd/libhttpd.h	2014-07-08 00:19:31.536080888 +0100
+@@ -36,9 +36,11 @@
+ #include <arpa/inet.h>
+ #include <netdb.h>
+ 
++#if 0
+ #if defined(AF_INET6) && defined(IN6_IS_ADDR_V4MAPPED)
+ #define USE_IPV6
+ #endif
++#endif
+ 
+ 
+ /* A few convenient defines. */

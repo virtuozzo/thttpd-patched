@@ -1,0 +1,123 @@
+diff -ur thttpd-2.25b.orig/extras/htpasswd.c thttpd-2.25b/extras/htpasswd.c
+--- thttpd-2.25b.orig/extras/htpasswd.c	2001-12-19 00:08:08.000000000 +0000
++++ thttpd-2.25b/extras/htpasswd.c	2014-07-07 16:53:16.917786909 +0100
+@@ -49,7 +49,7 @@
+     while((line[y++] = line[x++]));
+ }
+ 
+-static int getline(char *s, int n, FILE *f) {
++static int my_getline(char *s, int n, FILE *f) {
+     register int i=0;
+ 
+     while(1) {
+@@ -189,7 +189,7 @@
+     strcpy(user,argv[2]);
+ 
+     found = 0;
+-    while(!(getline(line,MAX_STRING_LEN,f))) {
++    while(!(my_getline(line,MAX_STRING_LEN,f))) {
+         if(found || (line[0] == '#') || (!line[0])) {
+             putline(tfp,line);
+             continue;
+diff -ur thttpd-2.25b.orig/libhttpd.c thttpd-2.25b/libhttpd.c
+--- thttpd-2.25b.orig/libhttpd.c	2005-06-29 18:50:39.000000000 +0100
++++ thttpd-2.25b/libhttpd.c	2014-07-07 18:54:41.548278886 +0100
+@@ -893,7 +893,7 @@
+     /* If the request was a POST then there might still be data to be read,
+     ** so we need to do a lingering close.
+     */
+-    if ( hc->method == METHOD_POST )
++    if ( hc->method == METHOD_POST || hc->method == METHOD_PUT )
+ 	hc->should_linger = 1;
+     }
+ 
+@@ -1196,6 +1196,8 @@
+ 	case METHOD_GET: return "GET";
+ 	case METHOD_HEAD: return "HEAD";
+ 	case METHOD_POST: return "POST";
++	case METHOD_PUT: return "PUT";
++	case METHOD_DELETE: return "DELETE";
+ 	default: return "UNKNOWN";
+ 	}
+     }
+@@ -2010,6 +2012,10 @@
+ 	hc->method = METHOD_HEAD;
+     else if ( strcasecmp( method_str, httpd_method_str( METHOD_POST ) ) == 0 )
+ 	hc->method = METHOD_POST;
++    else if ( strcasecmp( method_str, httpd_method_str( METHOD_PUT ) ) == 0 )
++	hc->method = METHOD_PUT;
++    else if ( strcasecmp( method_str, httpd_method_str( METHOD_DELETE ) ) == 0 )
++	hc->method = METHOD_DELETE;
+     else
+ 	{
+ 	httpd_send_err( hc, 501, err501title, "", err501form, method_str );
+@@ -3375,7 +3381,7 @@
+     ** interposer process, depending on if we've read some of the data
+     ** into our buffer.
+     */
+-    if ( hc->method == METHOD_POST && hc->read_idx > hc->checked_idx )
++    if ( ( hc->method == METHOD_POST || hc->method == METHOD_PUT ) && hc->read_idx > hc->checked_idx )
+ 	{
+ 	int p[2];
+ 
+@@ -3526,7 +3532,7 @@
+     int r;
+     ClientData client_data;
+ 
+-    if ( hc->method == METHOD_GET || hc->method == METHOD_POST )
++    if ( hc->method == METHOD_GET || hc->method == METHOD_POST || hc->method == METHOD_PUT || hc->method == METHOD_DELETE )
+ 	{
+ 	if ( hc->hs->cgi_limit != 0 && hc->hs->cgi_count >= hc->hs->cgi_limit )
+ 	    {
+@@ -3597,7 +3603,8 @@
+     expnlen = strlen( hc->expnfilename );
+ 
+     if ( hc->method != METHOD_GET && hc->method != METHOD_HEAD &&
+-	 hc->method != METHOD_POST )
++	 hc->method != METHOD_POST && hc->method != METHOD_PUT &&
++	 hc->method != METHOD_DELETE )
+ 	{
+ 	httpd_send_err(
+ 	    hc, 501, err501title, "", err501form, httpd_method_str( hc->method ) );
+diff -ur thttpd-2.25b.orig/libhttpd.h thttpd-2.25b/libhttpd.h
+--- thttpd-2.25b.orig/libhttpd.h	2005-06-29 18:50:41.000000000 +0100
++++ thttpd-2.25b/libhttpd.h	2014-07-07 18:49:29.503714054 +0100
+@@ -149,6 +149,8 @@
+ #define METHOD_GET 1
+ #define METHOD_HEAD 2
+ #define METHOD_POST 3
++#define METHOD_PUT 4
++#define METHOD_DELETE 5
+ 
+ /* States for checked_state. */
+ #define CHST_FIRSTWORD 0
+diff -ur thttpd-2.25b.orig/thttpd.c thttpd-2.25b/thttpd.c
+--- thttpd-2.25b.orig/thttpd.c	2005-06-29 18:50:59.000000000 +0100
++++ thttpd-2.25b/thttpd.c	2014-07-07 22:45:13.438836661 +0100
+@@ -356,8 +356,8 @@
+     {
+     char* cp;
+     struct passwd* pwd;
+-    uid_t uid = 32767;
+-    gid_t gid = 32767;
++    uid_t uid = 0;
++    gid_t gid = 0;
+     char cwd[MAXPATHLEN+1];
+     FILE* logfp;
+     int num_ready;
+@@ -400,6 +400,7 @@
+     if ( throttlefile != (char*) 0 )
+ 	read_throttlefile( throttlefile );
+ 
++#if 0
+     /* If we're root and we're going to become another user, get the uid/gid
+     ** now.
+     */
+@@ -415,6 +416,7 @@
+ 	uid = pwd->pw_uid;
+ 	gid = pwd->pw_gid;
+ 	}
++#endif
+ 
+     /* Log file. */
+     if ( logfile != (char*) 0 )
